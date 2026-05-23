@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline 2 — Per-Account Sequence Generation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e16; --bg-2:#0f1521; --panel:#131b2b; --panel-2:#172134;
+    --line:#243349; --line-soft:#1c2738;
+    --ink:#e7edf6; --ink-dim:#9fb0c7; --ink-faint:#647590;
+    --accent:#3dd7c4; --accent-2:#5b8cff;
+    --cc:#d98cff;        /* claude-code zone */
+    --auto:#3dd7c4;      /* automated zone */
+    --warn:#ffb347; --bad:#ff6b7a; --good:#54e08a;
+    --shadow:0 18px 50px rgba(0,0,0,.45); --r:16px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:'Inter',system-ui,sans-serif;
+    background:radial-gradient(1100px 700px at 85% -8%, #1c1830 0%, transparent 58%),
+               radial-gradient(900px 600px at -5% 5%, #112431 0%, transparent 55%),
+               var(--bg);
+    color:var(--ink); line-height:1.5; -webkit-font-smoothing:antialiased; min-height:100vh;
+  }
+  .mono{font-family:'JetBrains Mono',monospace}
+  .wrap{max-width:1280px;margin:0 auto;padding:42px 28px 90px}
+
+  .eyebrow{display:inline-flex;align-items:center;gap:9px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-weight:600;padding:6px 13px;border:1px solid var(--line);border-radius:999px;background:rgba(61,215,196,.06)}
+  .eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
+  h1{font-size:40px;line-height:1.08;margin:18px 0 10px;font-weight:800;letter-spacing:-.02em}
+  h1 .sub{display:block;font-size:18px;font-weight:500;color:var(--ink-dim);margin-top:8px;letter-spacing:0}
+  .lede{max-width:820px;color:var(--ink-dim);font-size:16px}
+  .lede b{color:var(--ink);font-weight:600}
+  .nav-pill{display:inline-flex;gap:4px;margin-top:22px;padding:5px;border:1px solid var(--line);border-radius:12px;background:var(--bg-2)}
+  .nav-pill a{text-decoration:none;color:var(--ink-dim);font-size:13px;font-weight:600;padding:8px 15px;border-radius:8px}
+  .nav-pill a.active{background:var(--accent);color:#06231f}
+  .nav-pill a:hover:not(.active){color:var(--ink)}
+
+  .toolbar{display:flex;gap:12px;align-items:center;margin:30px 0 6px;flex-wrap:wrap}
+  .expand-all{font-size:12px;color:var(--ink-dim);background:transparent;border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;font-family:inherit;font-weight:600}
+  .expand-all:hover{color:var(--ink);border-color:#33506f}
+  .hint{font-size:13px;color:var(--ink-faint)}
+
+  /* layout: state bus column + stages column */
+  .stagegrid{position:relative}
+
+  /* zone banners */
+  .zone{border-radius:18px;padding:2px;margin-top:18px;position:relative}
+  .zone.cc{background:linear-gradient(180deg,rgba(217,140,255,.35),rgba(217,140,255,.05))}
+  .zone.auto{background:linear-gradient(180deg,rgba(61,215,196,.35),rgba(61,215,196,.05))}
+  .zone-inner{background:linear-gradient(180deg,var(--bg-2),var(--bg));border-radius:16px;padding:18px 18px 22px}
+  .zone-head{display:flex;align-items:center;gap:13px;margin-bottom:6px;flex-wrap:wrap}
+  .zone-tag{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;padding:5px 11px;border-radius:7px}
+  .zone.cc .zone-tag{background:rgba(217,140,255,.14);color:#e6b6ff;border:1px solid rgba(217,140,255,.3)}
+  .zone.auto .zone-tag{background:rgba(61,215,196,.13);color:var(--accent);border:1px solid rgba(61,215,196,.3)}
+  .zone-head h2{margin:0;font-size:19px;font-weight:800;letter-spacing:-.01em}
+  .zone-head .cmd{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink-dim);background:var(--panel);border:1px solid var(--line);padding:5px 10px;border-radius:7px;margin-left:auto}
+  .zone-why{margin:0 0 14px;font-size:13.5px;color:var(--ink-dim);max-width:880px}
+  .zone-why b{color:var(--ink)}
+
+  /* stage card */
+  .connector{height:20px;margin-left:36px;width:2px;background:var(--line)}
+  .stage{border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,var(--panel),var(--bg-2));overflow:hidden;transition:border-color .18s,box-shadow .18s;margin-bottom:0}
+  .stage + .stage{margin-top:14px}
+  .stage:hover{border-color:#33506f}
+  .stage.open{box-shadow:var(--shadow)}
+  .stage.open.zcc{border-color:var(--cc);box-shadow:0 0 0 1px rgba(217,140,255,.25),var(--shadow)}
+  .stage.open.zauto{border-color:var(--auto);box-shadow:0 0 0 1px rgba(61,215,196,.25),var(--shadow)}
+  .stage-head{display:grid;grid-template-columns:50px 1fr auto;gap:15px;align-items:center;padding:15px 18px;cursor:pointer;user-select:none}
+  .idx{width:50px;height:50px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:17px}
+  .zcc .idx{background:linear-gradient(150deg,var(--cc),#9b4fd0);color:#21082e}
+  .zauto .idx{background:linear-gradient(150deg,var(--auto),#27a98f);color:#06231f}
+  .titleblock h3{margin:0;font-size:17px;font-weight:700;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .titleblock .file{font-size:12px;color:var(--accent-2)}
+  .titleblock .ver{font-size:10.5px;color:var(--ink-faint);background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:2px 7px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.04em}
+  .titleblock p{margin:4px 0 0;color:var(--ink-dim);font-size:13px;max-width:660px}
+  .badges{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center;max-width:330px}
+  .badge{font-size:10.5px;font-weight:600;padding:4px 9px;border-radius:7px;white-space:nowrap;border:1px solid var(--line);background:var(--bg-2);color:var(--ink-dim);display:inline-flex;align-items:center;gap:5px}
+  .badge.model{color:#bfa8ff;border-color:#3a2f5e;background:rgba(140,110,230,.08)}
+  .badge.search{color:#ffd98a;border-color:#5a4a26;background:rgba(255,190,80,.08)}
+  .badge.nollm{color:var(--ink-faint)}
+  .badge.scope{color:var(--good);border-color:#2b6a44;background:rgba(84,224,138,.07)}
+  .chev{color:var(--ink-faint);transition:transform .2s;font-size:12px;margin-left:3px}
+  .stage.open .chev{transform:rotate(90deg)}
+  .stage-body{display:none;padding:0 18px 20px 83px;animation:fade .25s ease}
+  .stage.open .stage-body{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  @media(max-width:820px){.stage-body{padding-left:18px}}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin-top:4px}
+  @media(max-width:780px){.grid2{grid-template-columns:1fr}}
+  .field{border:1px solid var(--line-soft);border-radius:11px;padding:12px 14px;background:var(--bg)}
+  .field h4{margin:0 0 7px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);font-weight:700}
+  .field p{margin:0;font-size:13px;color:var(--ink-dim)}
+  .field ul{margin:0;padding-left:16px;font-size:13px;color:var(--ink-dim)}
+  .field li{margin:3px 0}
+  .tag{font-family:'JetBrains Mono',monospace;font-size:11.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--accent)}
+  .rw{margin-top:11px;font-size:12.5px;color:var(--ink-dim);display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  .rw .ctx{font-family:'JetBrains Mono',monospace;font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg)}
+  .rw .reads{color:#9ad0ff;border-color:#264a66}
+  .rw .writes{color:var(--accent);border-color:#1f5e54}
+
+  /* MCP gate */
+  .gate{margin:16px 36px;border:1px solid var(--warn);border-radius:13px;background:rgba(255,179,71,.07);padding:14px 16px;display:flex;gap:13px;align-items:flex-start}
+  .gate .ic{font-size:20px}
+  .gate h4{margin:0 0 4px;font-size:14px;font-weight:700;color:#ffce82}
+  .gate p{margin:0;font-size:12.5px;color:#f3d9a8}
+  .gate code{font-family:'JetBrains Mono',monospace;background:rgba(0,0,0,.3);padding:1px 6px;border-radius:5px;color:#ffe1ad}
+
+  /* sub-steps inside a stage (Stage 0) */
+  .substeps{display:flex;flex-direction:column;gap:10px;margin-top:13px}
+  .substep{display:flex;gap:13px;border:1px solid var(--line-soft);border-radius:11px;padding:12px 14px;background:var(--bg)}
+  .substep .sk{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:#e6b6ff;background:rgba(217,140,255,.12);border:1px solid rgba(217,140,255,.32);border-radius:6px;padding:4px 9px;height:fit-content;white-space:nowrap;letter-spacing:.04em}
+  .substep .sd{flex:1;min-width:0}
+  .substep .sd b{font-size:13.5px;color:var(--ink);display:block;margin-bottom:4px;font-weight:700}
+  .substep .sd p{margin:0;font-size:12.5px;color:var(--ink-dim);line-height:1.55}
+
+  /* runner behavior grid */
+  .runlist{display:grid;grid-template-columns:repeat(2,1fr);gap:11px}
+  @media(max-width:680px){.runlist{grid-template-columns:1fr}}
+  .runitem{border:1px solid var(--line-soft);border-radius:11px;padding:13px 14px;background:var(--panel)}
+  .runitem .rn{font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:9px;flex-wrap:wrap;color:var(--accent)}
+  .runitem .rt{font-size:9.5px;font-weight:700;letter-spacing:.08em;padding:3px 7px;border-radius:5px;text-transform:uppercase;color:var(--ink-faint);background:var(--bg);border:1px solid var(--line);margin-left:auto}
+  .runitem p{margin:7px 0 0;font-size:12.5px;color:var(--ink-dim);line-height:1.55}
+  .costnote{margin-top:14px;display:flex;gap:12px;border:1px solid #2b6a44;background:rgba(84,224,138,.06);border-radius:12px;padding:14px 16px}
+  .costnote .ic{font-size:20px}
+  .costnote p{margin:0;font-size:13px;color:#bfe9cc}
+  .costnote b{color:#dcffe7}
+
+  /* services row */
+  .svcs{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}
+  .svc{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-size:12.5px;font-weight:600;color:var(--ink-dim)}
+  .svc svg{width:16px;height:16px;display:block}
+  .svc .role{font-weight:400;color:var(--ink-faint);font-size:11px}
+  .svc.halt{border-color:#6a2b32;background:rgba(255,107,122,.06)}
+  .svc.halt .role{color:#ff8a96}
+
+  /* section blocks */
+  section.block{margin-top:50px}
+  .block-h{display:flex;align-items:baseline;gap:14px;margin-bottom:6px;flex-wrap:wrap}
+  .block-h h2{font-size:24px;margin:0;font-weight:800;letter-spacing:-.01em}
+  .block-h .k{font-size:13px;color:var(--ink-faint)}
+  .block-sub{color:var(--ink-dim);font-size:14.5px;max-width:840px;margin:0 0 20px}
+
+  /* debate */
+  .phases{display:flex;flex-direction:column;gap:12px}
+  .phase{border:1px solid var(--line);border-radius:13px;background:var(--panel);overflow:hidden}
+  .phase-h{display:flex;align-items:center;gap:12px;padding:13px 16px}
+  .pnum{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--ink-faint);border:1px solid var(--line);border-radius:6px;padding:3px 8px}
+  .phase-h h4{margin:0;font-size:15px;font-weight:700;flex:1}
+  .par{font-size:11px;font-weight:600;color:var(--accent-2);background:rgba(91,140,255,.1);border:1px solid #2a3f6c;padding:3px 9px;border-radius:6px}
+  .seqq{font-size:11px;font-weight:600;color:var(--ink-faint);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:6px}
+  .agents{display:grid;grid-template-columns:repeat(2,1fr);gap:11px;padding:0 16px 16px}
+  @media(max-width:680px){.agents{grid-template-columns:1fr}}
+  .ag{border:1px solid var(--line-soft);border-radius:11px;padding:13px 14px;background:var(--bg);position:relative}
+  .ag .role{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .ag .mdl{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#bfa8ff;margin-left:auto}
+  .ag p{margin:7px 0 0;font-size:12.5px;color:var(--ink-dim)}
+  .ag .av{width:9px;height:9px;border-radius:50%}
+  .adv{background:var(--good)} .chl{background:var(--accent-2)} .dev{background:var(--bad)} .arb{background:var(--warn)}
+  .single{grid-template-columns:1fr}
+  .ruleflag{margin-top:13px;border-left:2px solid var(--accent);padding:6px 0 6px 13px;font-size:13px;color:var(--ink-dim)}
+  .ruleflag b{color:var(--ink)}
+
+  /* RTW categories */
+  .rtw{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:820px){.rtw{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.rtw{grid-template-columns:1fr}}
+  .cat{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel);transition:border-color .15s,transform .15s}
+  .cat:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .cat .key{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);font-weight:600}
+  .cat h5{margin:6px 0 5px;font-size:14px;font-weight:700}
+  .cat p{margin:0;font-size:12px;color:var(--ink-dim)}
+  .diversity{margin-top:14px;border:1px dashed var(--line);border-radius:11px;padding:13px 15px;font-size:13px;color:var(--ink-dim)}
+  .diversity b{color:var(--ink)}
+
+  /* program status table */
+  .pstable{width:100%;border-collapse:collapse;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .pstable th,.pstable td{text-align:left;padding:11px 14px;font-size:13px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  .pstable th{background:var(--panel-2);color:var(--ink-faint);font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:700}
+  .pstable td:first-child{white-space:nowrap}
+  .pstable tr:last-child td{border-bottom:0}
+  .ps{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;padding:3px 9px;border-radius:6px}
+  .ps-relaunching{color:#ffce82;background:rgba(255,179,71,.1)}
+  .ps-winding{color:#ff8a96;background:rgba(255,107,122,.1)}
+  .ps-growing{color:#7df0a8;background:rgba(84,224,138,.1)}
+  .ps-stable{color:#9ad0ff;background:rgba(91,140,255,.1)}
+  .ps-declining{color:#ffb088;background:rgba(255,150,90,.1)}
+  .ps-greenfield{color:#3dd7c4;background:rgba(61,215,196,.1)}
+  .ps-unknown{color:var(--ink-faint);background:var(--bg)}
+  .pstable td b{color:var(--ink)}
+
+  /* validator rules */
+  .rules{display:grid;grid-template-columns:repeat(2,1fr);gap:11px}
+  @media(max-width:680px){.rules{grid-template-columns:1fr}}
+  .rule{border:1px solid var(--line-soft);border-radius:11px;padding:13px 14px;background:var(--panel)}
+  .rule .nm{font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:9px}
+  .rule p{margin:7px 0 0;font-size:12.5px;color:var(--ink-dim)}
+  .sev{font-size:9.5px;font-weight:700;letter-spacing:.08em;padding:3px 7px;border-radius:5px;margin-left:auto;text-transform:uppercase}
+  .sev-block{color:#ff8a96;background:rgba(255,107,122,.12);border:1px solid #6a2b32}
+  .sev-warn{color:#ffce82;background:rgba(255,179,71,.1);border:1px solid #5a4a26}
+  .valnote{margin-top:16px;display:flex;gap:12px;border:1px solid #2b6a44;background:rgba(84,224,138,.06);border-radius:12px;padding:14px 16px}
+  .valnote .ic{font-size:20px}
+  .valnote p{margin:0;font-size:13px;color:#bfe9cc}
+  .valnote b{color:#dcffe7}
+  .provblock{margin-top:12px;display:flex;gap:12px;border:1px solid #6a2b32;background:rgba(255,107,122,.06);border-radius:12px;padding:14px 16px}
+  .provblock .ic{font-size:20px}
+  .provblock p{margin:0;font-size:13px;color:#f3c6cc}
+  .provblock b{color:#ffdce0}
+
+  /* intelligence layer */
+  .ail{border:1px solid var(--line);border-radius:16px;background:linear-gradient(180deg,var(--panel),var(--bg-2));padding:22px}
+  .scopes{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-top:16px}
+  @media(max-width:780px){.scopes{grid-template-columns:1fr}}
+  .scopecard{border:1px solid var(--line-soft);border-radius:12px;padding:15px;background:var(--bg)}
+  .scopecard .sc{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--accent)}
+  .scopecard .uses{font-size:11px;color:var(--ink-faint);margin-top:3px}
+  .scopecard ul{margin:10px 0 0;padding-left:16px;font-size:12px;color:var(--ink-dim)}
+  .scopecard li{margin:3px 0}
+  .scopecard .plus{color:var(--good);font-weight:600}
+
+  /* context schema */
+  .ctxbox{border:1px solid var(--line);border-radius:14px;background:var(--bg-2);padding:18px;font-family:'JetBrains Mono',monospace;font-size:12.5px;overflow-x:auto}
+  .ctxrow{display:flex;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line-soft);align-items:baseline}
+  .ctxrow:last-child{border-bottom:0}
+  .ctxkey{color:var(--accent);min-width:200px}
+  .ctxby{color:var(--ink-faint);font-size:11px}
+  .ctxdesc{color:var(--ink-dim);font-family:'Inter',sans-serif;font-size:12.5px}
+
+  footer{margin-top:60px;border-top:1px solid var(--line-soft);padding-top:22px;color:var(--ink-faint);font-size:12.5px;display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
+  .legend{display:flex;gap:15px;flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <span class="eyebrow"><span class="dot"></span>Ordergroove Prospecting Intelligence · Pipeline 2 of 2</span>
+    <h1>Per-Account Sequence Generation
+      <span class="sub">From a single named account to a validated, personalized outreach sequence per buyer</span>
+    </h1>
+    <p class="lede">For one account at a time, this pipeline checks whether we've engaged them before, finds and qualifies the right people, researches the company, debates the strongest message for each person, writes a full multi-touch sequence, polishes the voice, and gates it for quality before it ships. It runs across <b>two execution environments</b> — the first two stages need live tool access only available inside a Claude Code session; the rest run unattended from the terminal.</p>
+
+    <div class="nav-pill">
+      <a href="pipeline-1-classification-research.html">① Classification &amp; Research</a>
+      <a class="active" href="pipeline-2-sequence-generation.html">② Per-Account Sequences</a>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <button class="expand-all" id="expandAll">Expand all stages</button>
+    <span class="hint">Click any stage for detail. Scroll down for the Debate engine, right-to-win categories, and the validator's named rules.</span>
+  </div>
+
+  <div class="stagegrid" id="grid"></div>
+
+  <!-- ===== RUNNER BEHAVIOR ===== -->
+  <section class="block" id="runner">
+    <div class="block-h"><h2>How the runner orchestrates Stages 2–7</h2><span class="k mono">run-pipeline.js</span></div>
+    <p class="block-sub">The terminal runner is more than a sequencer. It discovers work, parallelizes across accounts, gates unsafe stages, resolves account names fuzzily, and writes its own audit trail. Each account's stages stay <b>strictly sequential</b>; only the cross-account fan-out is parallel.</p>
+    <div class="runlist" id="rungrid"></div>
+    <div class="costnote"><span class="ic">💰</span><p><b>Cost tracking is instrumented at every API call.</b> Every agent imports <span class="mono">{ logUsage }</span> from <span class="mono">lib/usage-logger.js</span> and appends one entry per <span class="mono">client.messages.create()</span> response to <span class="mono">sequences/&lt;Account&gt;/cost-log.json</span> — model, tokens, cache reads/writes, USD cost. <b>research-synthesis-agent.js and debate-agent-v2.js are not yet instrumented</b>, which is why Stages 2 and 3 carry the cost-untracked badge above.</p></div>
+  </section>
+
+  <!-- ===== ACCUMULATED ACCOUNT INTELLIGENCE LAYER ===== -->
+  <section class="block" id="intel">
+    <div class="block-h"><h2>Accumulated Account Intelligence Layer</h2><span class="k mono">lib/account-knowledge.js</span></div>
+    <p class="block-sub">Every LLM-driven stage opens by building a <b>preamble</b> — a plain-English projection of everything currently known about the account — and prepends it to every model call. This is how a learning made in Stage 2 reaches the writer in Stage 4. The preamble has three <b>scopes</b>; each stage requests the one it needs.</p>
+    <div class="ail">
+      <div class="scopes">
+        <div class="scopecard">
+          <div class="sc">minimal</div>
+          <div class="uses">building block — not requested directly by a stage</div>
+          <ul><li>Identity</li><li>Prior engagement</li><li>Recurring revenue programs</li></ul>
+        </div>
+        <div class="scopecard">
+          <div class="sc">research</div>
+          <div class="uses">used by · Persona (S1) · Voice (S5) · Validator (S6)</div>
+          <ul>
+            <li>everything in <b>minimal</b></li>
+            <li class="plus">+ Timing</li>
+            <li class="plus">+ Decision maker</li>
+            <li class="plus">+ Confidence gaps</li>
+          </ul>
+        </div>
+        <div class="scopecard">
+          <div class="sc">full</div>
+          <div class="uses">used by · Research Synthesis (S2) · Debate (S3) · Writing (S4)</div>
+          <ul>
+            <li>everything in <b>research</b></li>
+            <li class="plus">+ Pipeline state</li>
+            <li class="plus">+ Source freshness</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== SHARED STATE ===== -->
+  <section class="block" id="state">
+    <div class="block-h"><h2>Shared State: <span class="mono" style="font-size:19px">pipeline_context.json</span></h2><span class="k mono">one file per account · lib/pipeline-context.js</span></div>
+    <p class="block-sub">There is one state file per account at <span class="tag">sequences/{Account}/pipeline_context.json</span>. It is <b>additive</b> — each stage appends to its own section and stamps <span class="tag">stages_completed</span>, never overwriting other sections. Re-running a finished stage triggers an overwrite confirmation.</p>
+    <div class="ctxbox" id="ctxbox"></div>
+  </section>
+
+  <!-- ===== DEBATE ENGINE ===== -->
+  <section class="block" id="debate">
+    <div class="block-h"><h2>Inside Stage 3: The Debate Engine</h2><span class="k mono">debate-agent-v2.js</span></div>
+    <p class="block-sub">For each qualified persona, four AI agents argue out the strongest outreach angle. They run in ordered <b>phases</b> — the arguers run in true parallel across all personas, the judge runs last. The output (<span class="tag">winning_hook</span> + <span class="tag">winning_angle</span>) is the strategic backbone the writer builds on.</p>
+    <div class="phases" id="phases"></div>
+  </section>
+
+  <!-- ===== RTW CATEGORIES ===== -->
+  <section class="block" id="rtw">
+    <div class="block-h"><h2>The 6 Right-to-Win Categories</h2><span class="k mono">debate angle space</span></div>
+    <p class="block-sub">Every angle must draw from one of these six categories. The diversity rule forces breadth.</p>
+    <div class="rtw" id="rtwgrid"></div>
+    <div class="diversity">⚖️ <b>Category diversity rule:</b> the Challenger must pick a <b>different</b> right-to-win category than the Advocate. The Arbitrator enforces this — if both land on the same one, it flags a <span class="tag">diversity_violation</span> and resolves it before declaring a winner. This guarantees the winning hook (Email 1) and the runner-up hook (Email 3) attack from genuinely different directions.</div>
+  </section>
+
+  <!-- ===== PROGRAM STATUS ===== -->
+  <section class="block" id="pstatus">
+    <div class="block-h"><h2>program_status drives the angle</h2><span class="k mono">set in Stage 1 · steers Stage 3</span></div>
+    <p class="block-sub">During qualification, the persona agent classifies where the account's subscription/membership program stands. That single field changes the strategic frame the Debate engine is allowed to pursue.</p>
+    <table class="pstable" id="pstable"></table>
+  </section>
+
+  <!-- ===== VALIDATOR RULES ===== -->
+  <section class="block" id="rules">
+    <div class="block-h"><h2>Inside Stage 6: The Validator's Named Rules</h2><span class="k mono">validator-agent.js</span></div>
+    <p class="block-sub">The validator runs a battery of named checks on every sequence — most are deterministic (no API call), two use Claude. Critically, content violations <b>no longer hard-stop the pipeline</b>: they annotate the persona's .docx and ship as <span class="tag">written_with_warnings</span>. Only two things actually block export.</p>
+    <div class="rules" id="rulegrid"></div>
+    <div class="provblock"><span class="ic">⛔</span><p><b>SOURCE_PROVENANCE_VIOLATION — the real hard block.</b> Before any sequence is validated, the agent walks all upstream JSON and the account's <span class="mono">pipeline_context.json</span> for any <span class="mono">source_url</span> on the Tier 3 blocklist or any field tagged <span class="mono">source_tier: 3</span>. A single hit blocks export (exit 2) until the field is re-researched from a primary source.</p></div>
+    <div class="valnote"><span class="ic">✓</span><p><b>The other hard stop is structural:</b> if every sequence is skipped because checkpoint names don't match the debate results, that's a wiring error, not a content one — so it halts. Everything else (em dashes, exec length, weak specificity) is annotated and the pipeline continues.</p></div>
+  </section>
+
+  <footer>
+    <div class="legend">
+      <span><i style="background:var(--cc)"></i>Claude Code required</span>
+      <span><i style="background:var(--auto)"></i>Automated (run-pipeline.js)</span>
+      <span><i style="background:#bfa8ff"></i>Claude model</span>
+      <span><i style="background:#ffd98a"></i>Web search</span>
+      <span><i style="background:var(--good)"></i>Preamble scope</span>
+    </div>
+    <div>Architecture mirror of <span class="mono">run-pipeline.js</span> &amp; Stages 0–7 · for sales &amp; business stakeholders</div>
+  </footer>
+</div>
+
+<script>
+/* ===== brand logos (inline SVG, recognizable marks) ===== */
+const LOGO = {
+  slack:`<svg viewBox="0 0 122 122" xmlns="http://www.w3.org/2000/svg"><path fill="#36C5F0" d="M25.8 77a12.9 12.9 0 1 1-12.9-12.9h12.9V77z"/><path fill="#36C5F0" d="M32.3 77a12.9 12.9 0 0 1 25.8 0v32.3a12.9 12.9 0 1 1-25.8 0V77z"/><path fill="#2EB67D" d="M45.2 25.8A12.9 12.9 0 1 1 58.1 12.9v12.9H45.2z"/><path fill="#2EB67D" d="M45.2 32.3a12.9 12.9 0 0 1 0 25.8H12.9a12.9 12.9 0 1 1 0-25.8h32.3z"/><path fill="#ECB22E" d="M96.2 45.2a12.9 12.9 0 1 1 12.9 12.9H96.2V45.2z"/><path fill="#ECB22E" d="M89.7 45.2a12.9 12.9 0 0 1-25.8 0V12.9a12.9 12.9 0 1 1 25.8 0v32.3z"/><path fill="#E01E5A" d="M76.8 96.2a12.9 12.9 0 1 1-12.9 12.9V96.2h12.9z"/><path fill="#E01E5A" d="M76.8 89.7a12.9 12.9 0 0 1 0-25.8h32.3a12.9 12.9 0 1 1 0 25.8H76.8z"/></svg>`,
+  gmail:`<svg viewBox="0 0 52 40" xmlns="http://www.w3.org/2000/svg"><path fill="#4285F4" d="M3.6 40h7.3V22.2L0 13.9v22.5C0 38.4 1.6 40 3.6 40z"/><path fill="#34A853" d="M41.1 40h7.3c2 0 3.6-1.6 3.6-3.6V13.9l-10.9 8.3"/><path fill="#FBBC04" d="M41.1 6.6v15.6L52 13.9V8.4c0-5-5.8-7.9-9.8-4.9"/><path fill="#EA4335" d="M10.9 22.2V6.6L26 17.9 41.1 6.6v15.6L26 33.5"/><path fill="#C5221F" d="M0 8.4v5.5l10.9 8.3V6.6L9.8 3.5C5.8.5 0 3.4 0 8.4z"/></svg>`,
+  drive:`<svg viewBox="0 0 87 78" xmlns="http://www.w3.org/2000/svg"><path fill="#0066DA" d="M6.6 66.9 10.4 73.4c.8 1.4 2 2.5 3.4 3.3L27.3 53H0c0 1.6.4 3.2 1.2 4.6z"/><path fill="#00AC47" d="M43.5 27 29.8 3.3c-1.4.8-2.6 1.9-3.4 3.3L1.2 50.4C.4 51.8 0 53.4 0 55h27.3z"/><path fill="#EA4335" d="M73.3 76.7c1.4-.8 2.6-1.9 3.4-3.3l1.6-2.7 7.5-13c.8-1.4 1.2-3 1.2-4.6H59.7l5.8 11.4z"/><path fill="#00832D" d="M43.5 27 57.2 3.3c-1.4-.8-3-1.2-4.6-1.2H34.4c-1.6 0-3.2.5-4.6 1.2z"/><path fill="#2684FC" d="M59.7 55H27.3L13.6 78.7c1.4.8 3 1.2 4.6 1.2h50.6c1.6 0 3.2-.5 4.6-1.2z"/><path fill="#FFBA00" d="M73.2 28.5 60.6 6.6c-.8-1.4-2-2.5-3.4-3.3L43.5 27l16.2 28h27.3c0-1.6-.4-3.2-1.2-4.6z"/></svg>`,
+  gong:`<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#8039DF"/><circle cx="12" cy="12" r="6.4" fill="none" stroke="#fff" stroke-width="2.1"/><circle cx="12" cy="12" r="1.9" fill="#fff"/></svg>`,
+  apollo:`<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#0B0B0F"/><path d="M12 5.2 7.2 18h2.6l.95-2.7h4.5L16.2 18h2.6L14 5.2zm-.55 7.7L12 9.5l1.55 3.4z" fill="#FFCC4D"/></svg>`,
+  lusha:`<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect width="24" height="24" rx="6" fill="#291D54"/><path d="M7 6h2.5v9H15v2.4H7z" fill="#FF3F76"/></svg>`,
+  driveMcp:`<svg viewBox="0 0 87 78" xmlns="http://www.w3.org/2000/svg"><path fill="#0066DA" d="M6.6 66.9 10.4 73.4c.8 1.4 2 2.5 3.4 3.3L27.3 53H0c0 1.6.4 3.2 1.2 4.6z"/><path fill="#00AC47" d="M43.5 27 29.8 3.3c-1.4.8-2.6 1.9-3.4 3.3L1.2 50.4C.4 51.8 0 53.4 0 55h27.3z"/><path fill="#EA4335" d="M73.3 76.7c1.4-.8 2.6-1.9 3.4-3.3l1.6-2.7 7.5-13c.8-1.4 1.2-3 1.2-4.6H59.7l5.8 11.4z"/><path fill="#00832D" d="M43.5 27 57.2 3.3c-1.4-.8-3-1.2-4.6-1.2H34.4c-1.6 0-3.2.5-4.6 1.2z"/><path fill="#2684FC" d="M59.7 55H27.3L13.6 78.7c1.4.8 3 1.2 4.6 1.2h50.6c1.6 0 3.2-.5 4.6-1.2z"/><path fill="#FFBA00" d="M73.2 28.5 60.6 6.6c-.8-1.4-2-2.5-3.4-3.3L43.5 27l16.2 28h27.3c0-1.6-.4-3.2-1.2-4.6z"/></svg>`
+};
+
+/* ===== stage data — sourced from run-pipeline.js + each agent file ===== */
+const STAGES = [
+  { zone:"cc", n:0, title:"Engagement Check", file:"engagement-check-agent.js",
+    nollm:true,
+    blurb:"Have we touched this account before? Queries four systems to decide cold-open vs. warm re-engagement — and whether to halt entirely.",
+    body:{
+      what:"No LLM — pure deterministic synthesis across four sources. Runs as <b>four sub-steps</b>: a terminal script handles Gong (and intent signals); Claude Code handles Gmail, Slack, and Drive in conversation via MCP tools, then merges everything into the same context file.",
+      substeps:[
+        {k:"A",t:"Gong query — terminal script",d:"<span class='mono'>node engagement-check-agent.js --account \"Name\"</span> queries the local Gong MCP server's SQLite store (FTS5 transcript search) and writes the Gong portion of <span class='tag'>prior_engagement</span>. Sets <span class='tag'>mcp_steps_pending: true</span> — the guard every downstream stage will check."},
+        {k:"B",t:"Gmail · Slack · Drive — MCP tools in Claude Code",d:"Runs in conversation only, never from the script. <b>Gmail</b>: 18-month two-way engagement threads filtered to signal keywords. <b>Slack</b>: <b>four</b> queries via <span class='mono'>slack_search_public_and_private</span> — workspace-wide, <span class='mono'>#p-</span> prospect channel, <span class='mono'>#c-</span> customer channel (halts pipeline if active), <span class='mono'>#you-got-mail</span>. <b>Drive</b>: filename match against proposal / deck / SOW / recap keywords."},
+        {k:"C",t:"Merge MCP findings into pipeline_context.json",d:"Claude Code edits the same JSON Step A wrote, adding to (not overwriting) its <span class='tag'>prior_engagement</span> section: <span class='mono'>sources_checked</span>, <span class='mono'>sources_with_signal</span>, <span class='mono'>contacts_involved</span>, <span class='mono'>last_touch_date</span>, <span class='mono'>engagement_summary</span>, <span class='mono'>context_notes</span>. Sets <span class='tag'>mcp_steps_pending: false</span>. <b>This is what unblocks Stage 3.</b>"},
+        {k:"D",t:"Intent signals load — automatic, non-blocking",d:"Runs inside the Step A script at the end of <span class='mono'>main()</span>. If <span class='mono'>data/intent-signals/&lt;slug&gt;.json</span> exists, it is read into <span class='tag'>intent_intel</span>; if it does not, a warning is logged and the pipeline continues. Absence never blocks Stage 1."}
+      ],
+      produces:["prior_engagement: summary, last touch date, contacts involved","mcp_steps_pending flag (the gate for Stage 3)","Optional intent_intel loaded from a signals file (Step D)"],
+      services:[
+        {k:"gong",label:"Gong",role:"local SQLite via MCP · Step A"},
+        {k:"gmail",label:"Gmail",role:"two-way threads, 18mo · Step B"},
+        {k:"slack",label:"Slack",role:"4 searches incl. #c-, #you-got-mail · Step B"},
+        {k:"drive",label:"Drive",role:"proposals, decks, SOWs · Step B"}
+      ],
+      slack:true,
+      reads:"prior_engagement (init)", writes:"prior_engagement · intent_intel · source_pointers",
+      noscope:true
+    }
+  },
+  { zone:"cc", n:1, title:"Persona Sourcing", file:"persona-agent.js",
+    model:"claude-sonnet-4-6", search:true, scope:"research",
+    blurb:"Dual-sources candidate contacts from Apollo + Lusha, then AI-qualifies and scores each one.",
+    body:{
+      what:"Candidates are pulled from <b>Apollo MCP</b> and <b>Lusha MCP</b> in parallel, deduped, and enriched (Apollo provides employment history). Then Sonnet + web search qualifies each person — researching their actual role, conference talks, and the company's program status — over a concurrency-3 worker pool. A deterministic rubric scores the survivors.",
+      produces:["Qualified personas (ranked) + disqualified, with reasoning","persona_role_type: champion / technical_blocker / economic_buyer","program_status per person","Typed signals + an outreach hook"],
+      services:[
+        {k:"apollo",label:"Apollo",role:"exec + manager search, enrichment"},
+        {k:"lusha",label:"Lusha",role:"UK/EU coverage, contact data"}
+      ],
+      rubric:true,
+      reads:"prior_engagement", writes:"personas { qualified, disqualified }"
+    }
+  },
+  { zone:"auto", n:2, title:"Research Synthesis", file:"research-synthesis-agent.js",
+    model:"claude-haiku-4-5 + claude-sonnet-4-6", search:true, scope:"full", costgap:true,
+    blurb:"Assembles a company brief in five ordered steps and writes company_brief.md.",
+    body:{
+      what:"Five steps: <b>(A)</b> extract prior-engagement directives → <b>(B)</b> fuzzy-match an existing Cowork brief in <span class='tag'>universe-research/briefs/</span> → <b>(C)</b> targeted web enrichment (engagement questions first) → <b>(D)</b> program policy / ToS intelligence (cancellation, pause/skip, tier mechanics, friction signals) → <b>(E)</b> generate <span class='tag'>company_brief.md</span> with no extra API calls. <span class='tag'>stripTier3Urls()</span> scrubs aggregator URLs after every web pass.",
+      produces:["account_research: company facts, recurring-revenue programs, friction signals","engagement_lens (cold vs warm framing)","company_brief.md — the first doc to read when opening an account","recommended_angles"],
+      reads:"prior_engagement · intent_intel", writes:"account_research"
+    }
+  },
+  { zone:"auto", n:3, title:"Debate Agent", file:"debate-agent-v2.js",
+    model:"claude-haiku-4-5 + claude-sonnet-4-6", scope:"full", costgap:true, gateAfter:true,
+    blurb:"A four-agent adversarial debate per persona resolves the single strongest outreach angle.",
+    body:{
+      what:"Per qualified persona: an <b>Advocate</b> and a <b>Challenger</b> (Haiku) each propose an angle from different right-to-win categories; a <b>Devil's Advocate</b> (Haiku) stress-tests both; an <b>Arbitrator</b> (Sonnet) picks the winner and a runner-up. No web search — reasoning is from the dossier and preamble only. See the Debate Engine section below for the phase ordering.",
+      produces:["winning_hook + winning_angle (Email 1 backbone)","runner_up_hook + runner_up_angle (Email 3 backbone)","Per-angle scores + arbitration rationale","Winning / runner-up right-to-win categories"],
+      reads:"personas · account_research · intent_intel", writes:"debate_results"
+    }
+  },
+  { zone:"auto", n:4, title:"Writing Agent", version:"v6", file:"writing-agent.js",
+    model:"claude-sonnet-4-6", scope:"full",
+    blurb:"Writes the full 11-touch sequence over 12 days and renders one .docx per persona, plus an account-level summary.",
+    body:{
+      what:"Sonnet writes a complete cadence per persona built on the debate's winning angle (Email 1/2), the runner-up angle (Email 3/4), and a value-led breakup (Email 5), interleaved with calls and LinkedIn touches. Renders a <b>12-tab .docx</b> per persona — a cover Persona Overview followed by 11 touchpoint tabs. Also generates an account-level <span class='tag'>&lt;Company&gt; - Persona Overview.docx</span> that ranks every qualified persona in positional tiers (1–5, 6–10, 11–15) with winning + runner-up angles; debate-skipped personas appear at the bottom with skip reason.",
+      produces:["11 touches: email_1, linkedin_connection, call_1, email_2, call_2, email_3, call_3, email_4, linkedin_dm, call_4, email_5","One .docx per persona (12 tabs — cover + 11 touchpoints)","Account-level Persona Overview summary doc (ranked tiers)","writing-checkpoint.json"],
+      cadence:true,
+      reads:"debate_results", writes:"sequences"
+    }
+  },
+  { zone:"auto", n:5, title:"Voice Check", file:"voice-agent.js",
+    model:"claude-sonnet-4-6", scope:"research",
+    blurb:"Three passes of style enforcement against the house voice. Never blocks the pipeline.",
+    body:{
+      what:"<b>Pass 1 (deterministic):</b> auto-corrects em dashes, utilize/facilitate, generic CTAs, and 'Hey [Name]' openers; flags Email 3 prior-outreach phrases for rewrite; runs a specificity check with a rewrite loop (max 3). <b>Pass 2 (API):</b> rewrites every touch against the <span class='tag'>VOICE_EXAMPLES.md</span> corpus while preserving facts. <b>Pass 3:</b> re-runs validator checks and reverts any touch that regressed.",
+      produces:["Rewritten, on-voice sequence touches","voice_check.json + a PIPELINE NOTES callout if anything was flagged"],
+      neverblocks:true,
+      reads:"sequences", writes:"voice_check"
+    }
+  },
+  { zone:"auto", n:6, title:"Validator", version:"v6", file:"validator-agent.js",
+    model:"claude-haiku-4-5 + claude-sonnet-4-6", scope:"research",
+    blurb:"The pre-export quality gate. Named rules, mostly deterministic. Annotates rather than blocks.",
+    body:{
+      what:"Runs the named-rule battery (see the Validator section below). Deterministic checks need no API; <b>EXEC_LENGTH</b> uses Haiku and the <b>INSIDER_TEST</b> specificity scorer uses Sonnet. Content violations annotate the .docx and ship as <span class='tag'>written_with_warnings</span>. A Tier 3 source-provenance hit is the real hard block.",
+      produces:["Per-sequence pass / written_with_warnings report","Annotated .docx for any flagged sequence","validation_results section + validation-report.json"],
+      reads:"all upstream JSON · pipeline_context.json", writes:"validation_results"
+    }
+  },
+  { zone:"auto", n:7, title:"Drive Upload", file:"(Google Drive MCP — manual)",
+    manual:true,
+    blurb:"The finished .docx files land in the right Drive folder — via Claude Code, not the deprecated uploader.",
+    body:{
+      what:"The legacy <span class='tag'>upload_to_drive.js</span> is deprecated and 403s on every run because of an OAuth/ADC scope problem. The real path: open the account's <span class='tag'>sequences/&lt;Account&gt;/</span> folder, drag the .docx files into a Claude.ai chat, and Claude uploads them to the correct Cold Outreach subfolder using the <b>Google Drive MCP</b> connector.",
+      produces:["Sequence .docx files filed in the Cold Outreach Drive folder, ready for the rep"],
+      services:[{k:"driveMcp",label:"Google Drive MCP",role:"upload from Claude Code"}],
+      reads:"sequences/<Account>/*.docx", writes:"— (external)"
+    }
+  }
+];
+
+/* ===== render stages ===== */
+const grid = document.getElementById('grid');
+let lastZone = null;
+let zoneInner = null;
+
+function svc(s){
+  return `<span class="svc ${s.k==='slackHalt'?'halt':''}">${LOGO[s.k]||''}<span>${s.label}<span class="role"> · ${s.role}</span></span></span>`;
+}
+
+STAGES.forEach((s,i)=>{
+  // open a new zone container when zone changes
+  if(s.zone!==lastZone){
+    const zone=document.createElement('div');
+    zone.className='zone '+s.zone;
+    const isCC = s.zone==='cc';
+    zone.innerHTML=`<div class="zone-inner">
+      <div class="zone-head">
+        <span class="zone-tag">${isCC?'Claude Code required':'Automated'}</span>
+        <h2>${isCC?'Stages 0–1 · live tool access':'Stages 2–7 · sequential runner'}</h2>
+        <span class="cmd">${isCC?'(MCP tools in a Claude Code session)':'node run-pipeline.js --account "Name"'}</span>
+      </div>
+      <p class="zone-why">${isCC
+        ? 'These stages need MCP connectors (Gong, Gmail, Slack, Drive, Apollo, Lusha) that only exist inside a Claude Code session. They cannot run from the terminal alone.'
+        : 'Each account runs Stages 2–7 strictly in order. Multiple accounts can run in parallel, but a single account is never parallelized across stages.'}</p>
+      <div class="zone-stages"></div>
+    </div>`;
+    grid.appendChild(zone);
+    zoneInner = zone.querySelector('.zone-stages');
+    lastZone=s.zone;
+  }
+
+  const b=s.body;
+  const scopeBadge = s.noscope ? '' : (s.scope ? `<span class="badge scope">scope: ${s.scope}</span>` : '');
+  const modelBadge = s.model ? `<span class="badge model mono">${s.model}</span>` : (s.nollm?'<span class="badge nollm">no LLM · deterministic</span>':'');
+  const searchBadge = s.search ? '<span class="badge search">🔎 web search</span>' : '';
+  const costBadge = s.costgap ? '<span class="badge" style="color:#ffb088;border-color:#6a3f26;background:rgba(255,150,90,.07)">⚠ cost-untracked</span>' : '';
+  const manualChip = s.manual ? '<span class="tag" style="color:var(--ink-faint);border-color:var(--line)">MANUAL</span>' : '';
+
+  let extra='';
+  if(b.substeps) extra += `<div class="substeps">${b.substeps.map(st=>`<div class="substep"><span class="sk">Step ${st.k}</span><div class="sd"><b>${st.t}</b><p>${st.d}</p></div></div>`).join('')}</div>`;
+  if(b.services) extra += `<div class="svcs">${b.services.map(svc).join('')}</div>`;
+  if(b.slack) extra += `<div class="svcs" style="margin-top:9px"><span class="svc halt">${LOGO.slack}<span>Live <b style="color:#ff8a96">#c-</b> channel → <span class="role">HALT pipeline, route to CS</span></span></span><span class="svc">${LOGO.slack}<span>Archived <b>#p-</b> channel → <span class="role">warm re-engagement</span></span></span></div>`;
+  if(b.rubric) extra += `<div class="ruleflag"><b>Scoring rubric →</b> title match <b>30%</b> · seniority <b>25%</b> · department <b>20%</b> · career background <b>15%</b> · priority signals <b>10%</b>.</div>`;
+  if(b.cadence) extra += `<div class="ruleflag"><b>12-day cadence →</b> Day 1 Email 1 · D2 LinkedIn + Call 1 · D3 Email 2 · D4 Call 2 · D6 Email 3 + Call 3 · D7 Email 4 · D9 LinkedIn DM · D10 Call 4 · D12 Email 5 (breakup).</div>`;
+  if(b.neverblocks) extra += `<div class="ruleflag" style="border-color:var(--good)"><b>Never blocks.</b> Voice Check always lets the pipeline continue, whatever it finds.</div>`;
+
+  const versionChip = s.version ? `<span class="ver">${s.version}</span>` : '';
+
+  const card=document.createElement('div');
+  card.className='stagewrap';
+  card.innerHTML=`
+    <div class="stage z${s.zone}" data-i="${i}">
+      <div class="stage-head">
+        <div class="idx">${s.n}</div>
+        <div class="titleblock">
+          <h3>${s.title}${versionChip ? ' ' + versionChip : ''} ${manualChip} <span class="file mono">${s.file}</span></h3>
+          <p>${s.blurb}</p>
+        </div>
+        <div class="badges">${modelBadge}${searchBadge}${scopeBadge}${costBadge}<span class="chev">▶</span></div>
+      </div>
+      <div class="stage-body">
+        <div class="grid2">
+          <div class="field"><h4>What it does &amp; why</h4><p>${b.what}</p></div>
+          <div class="field"><h4>Produces</h4><ul>${b.produces.map(p=>`<li>${p}</li>`).join('')}</ul></div>
+        </div>
+        ${extra}
+        <div class="rw"><span class="ctx reads">reads · ${b.reads}</span><span class="ctx writes">writes · ${b.writes}</span></div>
+      </div>
+    </div>`;
+  zoneInner.appendChild(card);
+
+  // connector inside same zone
+  if(i<STAGES.length-1 && STAGES[i+1].zone===s.zone){
+    const c=document.createElement('div'); c.className='connector'; zoneInner.appendChild(c);
+  }
+
+  // MCP gate rendered between zones (after stage with gateAfter? actually between S1 and S2)
+});
+
+/* MCP gate — insert between the two zones */
+const zones=document.querySelectorAll('.zone');
+if(zones.length>=2){
+  const gate=document.createElement('div');
+  gate.className='gate';
+  gate.innerHTML=`<span class="ic">🔒</span><div>
+    <h4>MCP gate — checked before Stage 3</h4>
+    <p>Stage 0 sets <code>mcp_steps_pending: true</code> until the Gmail/Slack/Drive MCP searches actually run inside Claude Code. <code>run-pipeline.js</code> reads that flag and <b>blocks the Debate (Stage 3)</b> if it's still true — debating on incomplete engagement data silently degrades the messaging. Override only for genuinely cold accounts with <code>SKIP_MCP_CHECK=1</code>.</p>
+  </div>`;
+  zones[1].parentNode.insertBefore(gate, zones[1]);
+}
+
+/* stage toggle */
+grid.addEventListener('click',e=>{
+  const st=e.target.closest('.stage'); if(!st) return;
+  st.classList.toggle('open');
+});
+let allOpen=false;
+document.getElementById('expandAll').addEventListener('click',e=>{
+  allOpen=!allOpen;
+  document.querySelectorAll('.stage').forEach(s=>s.classList.toggle('open',allOpen));
+  e.target.textContent=allOpen?'Collapse all stages':'Expand all stages';
+});
+
+/* ===== context schema ===== */
+const CTX=[
+  ["account · run_date","init","Account name + run date — set on first stage write."],
+  ["stages_completed","every stage","Array of stage keys appended as each stage finishes — used by <span class='mono'>--pending</span> discovery and the staleness check."],
+  ["prior_engagement","Stage 0","Gong/Gmail/Slack/Drive findings; cold vs warm framing; the <span class='mono'>mcp_steps_pending</span> gate flag."],
+  ["intent_intel","Stage 0 (opt)","Loaded timing signals: urgency window, timing modifier, decision maker."],
+  ["personas","Stage 1","{ qualified[], disqualified[] } with role type, score, program_status."],
+  ["account_research","Stage 2","Company facts, recurring-revenue programs, friction, recommended angles."],
+  ["debate_results","Stage 3","Per-persona winning + runner-up hook, angle, and RTW category."],
+  ["sequences","Stage 4","The written 11-touch cadences per persona."],
+  ["voice_check","Stage 5","Voice-pass results and any flagged touches."],
+  ["validation_results","Stage 6","Pass / written_with_warnings report + violations."]
+];
+const cb=document.getElementById('ctxbox');
+cb.innerHTML = CTX.map(r=>`<div class="ctxrow"><span class="ctxkey">${r[0]}</span><span class="ctxby">${r[1]}</span><span class="ctxdesc">${r[2]}</span></div>`).join('')
+ + `<div class="ctxrow" style="opacity:.85"><span class="ctxkey">stage_timestamps · pipeline_provenance · source_pointers</span><span class="ctxby">all stages</span><span class="ctxdesc">bookkeeping &amp; audit trail.</span></div>`
+ + `<div class="ctxrow" style="opacity:.85;border-bottom:0"><span class="ctxkey" style="color:var(--ink-faint)">stage keys used in stages_completed[]</span><span class="ctxby">reference</span><span class="ctxdesc"><span class="mono" style="color:var(--accent)">engagement_check · persona_sourcing · research_synthesis · debate · writing · voice_check · validator</span></span></div>`;
+
+/* ===== runner behavior ===== */
+const RUNMODES=[
+  {n:`--account "Name"`,t:"single",d:"Run Stages 2–7 for one named account."},
+  {n:`--accounts "A,B,C"`,t:"batch list",d:"Comma-separated account names. Each account's stages still run in order; the runner parallelizes <em>across</em> accounts using the worker pool."},
+  {n:"--pending",t:"auto-discover",d:"Walks every <span class='mono'>sequences/&lt;Account&gt;/</span> folder and queues anything missing one of Stages 2–7. Sorts: stale first, then most-complete first."},
+  {n:"Staleness detection",t:"--pending only",d:"If Stage 0 or Stage 1 ran more recently than Stage 2, the account is flagged <span class='tag'>stale</span> and re-queued — Stage 2 needs to consume the fresh upstream data."},
+  {n:"--concurrency N",t:"default 10",d:"Maximum accounts running in parallel. Each account's own stages stay strictly sequential; only the cross-account fan-out is parallel."},
+  {n:`--from "Stage N"`,t:"skip",d:"Skip stages before <span class='mono'>N</span> across the queue. Useful for surgical re-runs after a fix."},
+  {n:"--dry-run",t:"plan only",d:"Print the resolved queue and the countdown, then exit without spawning any stage."},
+  {n:"MCP gate before Stage 3",t:"hard block",d:"Reads <span class='mono'>prior_engagement.mcp_steps_pending</span> from the account's context. If <span class='tag'>true</span>, Stage 3 is refused for that account. Override with <span class='mono'>SKIP_MCP_CHECK=1</span> only for genuinely cold accounts."},
+  {n:"Fuzzy account resolution",t:"account-resolver.js",d:"Account names passed in are matched against existing <span class='mono'>sequences/</span> folders before running, so <span class='mono'>\"GlassesUSA\"</span> resolves to an existing <span class='mono'>\"Glasses USA\"</span> folder instead of forking a new one."},
+  {n:"Run log",t:"sequences/_run_log.json",d:"After every run the runner appends one structured entry — mode, from_stage, concurrency, accounts queued, and per-account per-stage status with ✓ / ✗ / ⚠ / · symbols."},
+  {n:"Cost summary",t:"per account",d:"<span class='mono'>printCostSummary(account)</span> runs after each account finishes — per-agent table of input / output / cache tokens and USD cost, sourced from <span class='mono'>cost-log.json</span>."}
+];
+const rg = document.getElementById('rungrid');
+if(rg){
+  rg.innerHTML = RUNMODES.map(m=>`<div class="runitem"><div class="rn">${m.n}<span class="rt">${m.t}</span></div><p>${m.d}</p></div>`).join('');
+}
+
+/* ===== debate phases ===== */
+const PHASES=[
+  {n:"Phase 1",t:"Advocates + Challengers",par:true,desc:"Per persona, both arguers run together in true parallel via Promise.all across every qualified persona. Fully isolated contexts — no shared state between agents.",
+   agents:[
+     {c:"adv",role:"Advocate",mdl:"claude-haiku-4-5",p:"Builds the strongest single case — commits to one angle and one right-to-win category. No hedging."},
+     {c:"chl",role:"Challenger",mdl:"claude-haiku-4-5",p:"Finds the non-obvious angle a conventional rep would miss — must land on a different right-to-win category than the Advocate."}
+   ]},
+  {n:"Phase 2",t:"Devil's Advocates",par:true,desc:"Run after Phase 1 completes. Stress-tests both surviving angles across all personas in parallel.",
+   agents:[{c:"dev",role:"Devil's Advocate",mdl:"claude-haiku-4-5",p:"For each angle: the most likely failure mode, the flawed assumption, and the specific objection this person will have. Picks no winner — just exposes weaknesses for the judge to weigh."}]},
+  {n:"Phase 3",t:"Arbitrators",par:true,desc:"Sonnet runs last across all personas in parallel — the judge.",
+   agents:[{c:"arb",role:"Arbitrator",mdl:"claude-sonnet-4-6",p:"Enforces category diversity, then scores both angles on persona fit, hook specificity, right-to-win, engagement probability, and stress-test survival. Reads <b>persona_role_type</b> (champion / technical_blocker / economic_buyer) and shifts the evaluation lens — e.g. no revenue-upside pitch to a technical blocker, vision-level framing for an economic buyer. Outputs the winner, a runner-up, and may synthesize."}]}
+];
+document.getElementById('phases').innerHTML = PHASES.map(ph=>`
+  <div class="phase">
+    <div class="phase-h">
+      <span class="pnum">${ph.n}</span>
+      <h4>${ph.t}</h4>
+      ${ph.par?'<span class="par">⇄ parallel · all personas</span>':`<span class="seqq">${ph.seq||'sequential'}</span>`}
+    </div>
+    <div class="agents ${ph.agents.length===1?'single':''}">
+      ${ph.agents.map(a=>`<div class="ag"><div class="role"><span class="av ${a.c}"></span>${a.role}<span class="mdl">${a.mdl}</span></div><p>${a.p}</p></div>`).join('')}
+    </div>
+  </div>`).join('');
+
+/* ===== RTW categories ===== */
+const RTW=[
+  ["s2s_instore","S2S in-store","Scan to Subscribe — converting in-store purchase behavior into subscriptions via QR at the shelf."],
+  ["lifecycle_optim","Lifecycle optimization","Cancel flows, win-back campaigns, pause offers, A/B testing the retention mechanics."],
+  ["platform_breadth","Platform breadth","Full lifecycle subscription commerce vs. a billing-only point solution."],
+  ["omnichannel","Omnichannel","Platform-agnostic — works across DTC and retail, not locked to Shopify, follows brand growth."],
+  ["tco_engineering","TCO / engineering","Dev resources maintaining the subscription stack, tech debt, speed-to-market on changes."],
+  ["benchmark_data","Benchmark data","Peer performance benchmarks, subscription metrics, competitive intelligence."]
+];
+document.getElementById('rtwgrid').innerHTML = RTW.map(c=>`
+  <div class="cat"><div class="key">${c[0]}</div><h5>${c[1]}</h5><p>${c[2]}</p></div>`).join('');
+
+/* ===== program status table ===== */
+const PS=[
+  ["relaunching","relaunching","Actively rebuilding a program, often with C-suite commentary.","<b>Urgency:</b> get in before platform decisions lock in."],
+  ["winding_down","winding","A program is being shut down / migrated out.","<b>Rebuild window:</b> legacy debt cleared — cleanest moment to own the next architecture."],
+  ["growing","growing","Program is live and growing.","<b>Optimization:</b> lifecycle mechanics (cancel flows, win-back) are likely underleveraged."],
+  ["stable","stable","Program is live and flat.","<b>Peer / benchmark</b> angles beat urgency framing here."],
+  ["declining","declining","Live but showing devaluation / decay.","<b>Intervention:</b> act before a public wind-down, not after."],
+  ["greenfield","greenfield","No program at all.","<b>Greenfield signal:</b> can this person champion building one? A lower bar than owning an existing program."],
+  ["unknown","unknown","Not enough public info to assess.","Debate from company-level context — new CEO, earnings signals, job postings."]
+];
+document.getElementById('pstable').innerHTML =
+  `<thead><tr><th>Status</th><th>What it means</th><th>Debate angle direction</th></tr></thead><tbody>`+
+  PS.map(r=>`<tr><td><span class="ps ps-${r[1]}">${r[0]}</span></td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join('')+
+  `</tbody>`;
+
+/* ===== validator rules ===== */
+const RULES=[
+  ["EM_DASH","warn","det","Any em dash in a touch body — house style bans them."],
+  ["UNVERIFIED_STAT","warn","det","Any number/percentage/multiplier not in the approved verified-stats table (counts like 'days' are exempted)."],
+  ["PROSPECT_AS_PROOF","warn","det","A known prospect cited as an Ordergroove customer — whitelist-window check."],
+  ["BULLET_POINTS","warn","det","Bullet or numbered list inside an email body."],
+  ["PROHIBITED_OPENER","warn","det","Banned opening phrases — 'Quick follow-up', 'I hope this finds you well', 'Hey [Name]', etc."],
+  ["MISSING_TOUCHES","warn","det","Any of the 11 required touches absent from the sequence."],
+  ["LINKEDIN_CONN_LENGTH","warn","det","LinkedIn connection request over 300 characters."],
+  ["GENERIC_BUMP","warn","det","Email 2 or 4 leaning on 'any thoughts?' / 'checking in' filler."],
+  ["EMAIL3_REFERENCES_PRIOR","warn","det","Email 3 referencing prior outreach — it must be a fresh cold open on the runner-up angle."],
+  ["EXEC_LENGTH","warn","haiku","VP+ Email 1 or 3 over 6 sentences (Haiku counts). Downgraded to a warning."],
+  ["INSIDER_TEST","warn","sonnet","Sonnet scores opening specificity 1–5; ≤2 warns. 'Could this only have been written for this exact person?'"]
+];
+document.getElementById('rulegrid').innerHTML = RULES.map(r=>{
+  const eng = r[2]==='det'?'deterministic':(r[2]==='haiku'?'claude-haiku-4-5':'claude-sonnet-4-6');
+  return `<div class="rule"><div class="nm">${r[0]}<span class="sev sev-warn">annotate</span></div><p>${r[3]}<br><span class="mono" style="font-size:11px;color:var(--ink-faint)">${eng}</span></p></div>`;
+}).join('');
+</script>
+</body>
+</html>
